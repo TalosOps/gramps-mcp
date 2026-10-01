@@ -43,7 +43,7 @@ No more manual data entry, no context switching between apps, no generic genealo
 
 ## Features
 
-### 16 Genealogy Tools
+### 36 Genealogy Tools
 
 #### Search & Retrieval (3 tools)
 - **find_type** - Universal search for any entity type (person, family, event, place, source, citation, media, repository) using Gramps Query Language
@@ -60,6 +60,21 @@ No more manual data entry, no context switching between apps, no generic genealo
 - **create_note** - Create or update textual notes
 - **create_media** - Create or update media files
 - **create_repository** - Create or update repository records
+
+With an existing `handle`, `create_*` **merges**: list entries are only added and omitted fields are kept. `create_family`'s `child_handles` replaces the whole child list. To remove, clear or replace, use the edit tools below.
+
+#### Editing (20 tools)
+- **update_person / family / event / place / source / citation / note / media / repository** - Edit an existing object with replace semantics. The tool fetches the stored object, applies the edits and saves the whole object back:
+  - `set_fields` replaces values, lists included: `{"description": "Baptism", "citation_list": []}`
+  - `clear_fields` empties fields: `["date", "place"]` (a cleared date is a true empty date; the server recomputes its sort value)
+  - `add_refs` / `remove_refs` add or drop entries in reference lists, by handle or Gramps ID: `{"citation_list": ["C0014"]}`, `{"child_ref_list": ["I0087"]}`. `remove_refs` also removes dangling handles. Removing an entry that isn't present fails and saves nothing.
+  - `dry_run: true` shows the diff without saving
+  - Every write is read back and compared. A mismatch is reported as an error, never as success.
+- **delete_person / family / event / place / source / citation / note / media / repository** - Delete by handle or Gramps ID. Without `confirm: true` the call only previews the object and lists everything that references it. With `confirm: true` it deletes, checks the object is gone, reports which objects had references removed (and any that still hold one), and returns the deleted object's summary and full JSON for your log.
+- **get_note_full** - Read a note's complete text. Search results cut notes at 500 characters and now say so. Long notes are paged with `offset` / `max_chars`.
+- **append_note** - Add text to the end of a note (fetch, concatenate, save, verify). Existing text and formatting are kept.
+
+**Reference validation.** Every create and update now checks that newly added references (`citation_list`, `note_list`, `event_ref_list`, `child_ref_list`, `media_list`, `tag_list`, `father_handle`, `place`, ...) point at an existing object of the right type. Previously the API stored, for example, a note handle in `citation_list` as a dangling reference. References that were already stored are not re-checked, so objects holding old dangling references can still be edited and repaired.
 
 #### Analysis Tools (4 tools)
 - **tree_stats** - Get tree statistics and information
@@ -262,6 +277,14 @@ Create a new person record for Patrick O'Brien, born 1845 in Cork, Ireland
 
 ```txt
 Add a marriage event for John and Mary Smith on June 15, 1870 in Boston
+```
+
+```txt
+Detach citation C0014 from event E0010 and clear the date on E0011
+```
+
+```txt
+Show me what deleting family F0038 would affect, then delete it
 ```
 
 ### Genealogy Analysis
