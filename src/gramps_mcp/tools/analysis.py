@@ -424,6 +424,13 @@ def _format_tree_info(tree_info: Dict) -> str:
     else:
         result += "Statistics not available\n\n"
 
+    counts = tree_info.get("object_counts") or {}
+    if counts:
+        result += "## Object counts\n\n"
+        for key in sorted(counts):
+            result += f"• **{key.title()}:** {counts[key]:,}\n"
+        result += "\n"
+
     return result
 
 
@@ -435,14 +442,12 @@ async def get_tree_info_tool(client, _arguments: Dict) -> List[TextContent]:
     Returns counts of people, families, events, etc.
     """
     try:
-        # Get tree_id from settings
-        settings = get_settings()
-        tree_id = settings.gramps_tree_id
-
-        # Get tree info using unified API
-        tree_info = await client.make_api_call(
-            api_call=ApiCalls.GET_TREE, params=None, tree_id=tree_id
-        )
+        # Reason: GRAMPS_TREE_ID holds the tree *name* used to log in, while
+        # /trees/{id} wants the tree's UUID (404/403 otherwise). "-" means
+        # the caller's own tree.
+        tree_info = await client.raw_request("GET", "trees/-")
+        metadata = await client.raw_request("GET", "metadata/")
+        tree_info = {**tree_info, "object_counts": metadata.get("object_counts")}
 
         formatted_info = _format_tree_info(tree_info)
         return [TextContent(type="text", text=formatted_info)]

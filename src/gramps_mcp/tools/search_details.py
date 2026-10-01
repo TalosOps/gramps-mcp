@@ -26,7 +26,7 @@ from typing import Dict, List
 
 from mcp.types import TextContent
 
-from ..client import GrampsAPIError
+from ..client import GrampsAPIError, GrampsWebAPIClient
 from ..config import get_settings
 from ..handlers.family_detail_handler import format_family_detail
 from ..handlers.person_detail_handler import format_person_detail
@@ -100,34 +100,24 @@ async def get_type_tool(arguments: Dict) -> List[TextContent]:
     handle = arguments.get("handle")
     gramps_id = arguments.get("gramps_id")
 
-    # If gramps_id provided but no handle, find the handle first
+    # If gramps_id provided but no handle, look the handle up directly
     if gramps_id and not handle:
-        from .search_basic import find_type_tool
+        from ..references import get_by_gramps_id
 
-        search_result = await find_type_tool(
-            {"type": entity_type, "gql": f'gramps_id="{gramps_id}"', "max_results": 1}
-        )
-
-        # Extract handle from search result.
-        # The formatted identity line looks like:
-        #   "[Unknown] Berry (M) - I0089 - [1034b42418c65209fb87d0d52d4c]"
-        # A naive first-"[...]" match grabs bracketed name tokens such as
-        # "[Unknown]" instead of the handle, producing a bogus handle and a
-        # "Record not found" error. Gramps handles are long hex strings, so
-        # match those specifically; fall back to the last bracketed token on
-        # the first result block (the format always ends the identity line
-        # with the handle).
-        search_text = search_result[0].text
-        import re
-
-        handle_matches = re.findall(r"\[([0-9a-fA-F]{16,})\]", search_text)
-        if handle_matches:
-            handle = handle_matches[0]
-        else:
-            first_block = search_text.split("\n\n")[0]
-            generic = re.findall(r"\[([^\]]+)\]", first_block)
-            if generic:
-                handle = generic[-1]
+        entity = getattr(entity_type, "value", entity_type)
+        client = GrampsWebAPIClient()
+        try:
+            found = await get_by_gramps_id(client, entity, gramps_id)
+        finally:
+            await client.close()
+        if not found:
+            return [
+                TextContent(
+                    type="text", text=f"Error: No {entity} with Gramps ID {gramps_id}"
+                )
+            ]
+        handle = found["handle"]
+        entity_type = entity
 
     if entity_type == "person" and handle:
         return await get_person_tool({"person_handle": handle})

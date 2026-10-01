@@ -79,14 +79,20 @@ from .tools.batch_tools import (
     batch_tool,
     find_by_tag_tool,
 )
+from .tools.children import (
+    AddChildParams,
+    ChildParams,
+    add_child_tool,
+    remove_child_tool,
+)
 from .tools.deletion import make_delete_tool
 from .tools.editing import (
     append_note_tool,
     get_note_full_tool,
     make_update_tool,
 )
+from .tools.find import GetByIdParams, find_type_tool, get_by_gramps_id_tool
 from .tools.save import create_media_with_options, make_create_tool
-from .tools.search_basic import find_type_tool
 from .tools.search_details import get_type_tool
 from .write_support import with_write_options
 
@@ -345,6 +351,45 @@ TOOL_REGISTRY["batch"] = {
     "schema": BatchParams,
     "handler": batch_tool,
 }
+TOOL_REGISTRY["find_type"]["handler"] = find_type_tool
+TOOL_REGISTRY["find_type"]["description"] = (
+    "Search one entity type with GQL (read gql://documentation). Supports "
+    "and / or / not, parentheses, ~ (contains), !~, quoted strings with any "
+    'characters (escape " as \\"). Queries the server cannot run are '
+    "evaluated locally"
+)
+TOOL_REGISTRY["find_anything"][
+    "description"
+] += "; each hit shows a ~200-character snippet around the match"
+TOOL_REGISTRY["get_by_gramps_id"] = {
+    "description": (
+        "Get any object by Gramps ID (I/F/E/P/S/C/N/O/R prefix picks the type): "
+        "summary plus the complete, untruncated object JSON"
+    ),
+    "schema": GetByIdParams,
+    "handler": get_by_gramps_id_tool,
+}
+TOOL_REGISTRY["add_child"] = {
+    "description": (
+        "Add one child to a family with a relationship (birth, adopted, "
+        "unknown, ...); never replaces the existing children. Keeps the "
+        "child's parent_family_list in sync. Supports dry_run and tag"
+    ),
+    "schema": AddChildParams,
+    "handler": add_child_tool,
+}
+TOOL_REGISTRY["remove_child"] = {
+    "description": (
+        "Remove one child from a family (the person is kept); never touches "
+        "the other children. Supports dry_run and tag"
+    ),
+    "schema": ChildParams,
+    "handler": remove_child_tool,
+}
+TOOL_REGISTRY["tree_stats"]["description"] = (
+    "Tree name, id and object counts (people, families, events, ...). "
+    "Takes no arguments"
+)
 TOOL_REGISTRY["find_by_tag"] = {
     "description": "List every object (any type) carrying a tag, by tag name",
     "schema": FindByTagParams,
@@ -361,24 +406,38 @@ app = FastMCP("gramps", stateless_http=True, json_response=True)
 
 
 # Register all tools dynamically from the registry
+def _make_tool_function(tool_name: str, schema, handler):
+    """
+    Build the function FastMCP introspects for one tool.
+
+    The handler is bound by closure, not as a default argument, so it does not
+    leak into the tool's input schema. Tools whose schema has no required
+    fields (e.g. tree_stats) can be called with no arguments at all.
+    """
+    if any(field.is_required() for field in schema.model_fields.values()):
+
+        async def tool_function(arguments):
+            return await handler(arguments.model_dump())
+
+        tool_function.__annotations__ = {"arguments": schema}
+    else:
+
+        async def tool_function(arguments=None):
+            return await handler((arguments or schema()).model_dump())
+
+        tool_function.__annotations__ = {"arguments": Optional[schema]}
+    tool_function.__name__ = tool_name
+    return tool_function
+
+
 def register_tools():
     """Register all tools from the registry with FastMCP."""
     for tool_name, tool_config in TOOL_REGISTRY.items():
-        schema = tool_config["schema"]
-        handler_func = tool_config["handler"]
-        description = tool_config["description"]
-
-        # Create the async handler function with proper schema annotation
-        async def create_handler(arguments, handler=handler_func):
-            return await handler(arguments.model_dump())
-
-        # Set proper metadata
-        create_handler.__name__ = tool_name
-        create_handler.__doc__ = description
-        create_handler.__annotations__ = {"arguments": schema}
-
-        # Register with FastMCP
-        app.tool(description=description)(create_handler)
+        tool_function = _make_tool_function(
+            tool_name, tool_config["schema"], tool_config["handler"]
+        )
+        tool_function.__doc__ = tool_config["description"]
+        app.tool(description=tool_config["description"])(tool_function)
 
 
 register_tools()

@@ -528,8 +528,10 @@ async def find_type_tool(arguments: Dict) -> List[TextContent]:
 @with_client
 async def find_anything_tool(client, arguments: Dict) -> List[TextContent]:
     """
-    Full-text search across all entity types.
+    Full-text search across all entity types, with a snippet per match.
     """
+    from .find import snippet
+
     try:
         # Validate parameters
         params = SearchParams(**arguments)
@@ -579,6 +581,11 @@ async def find_anything_tool(client, arguments: Dict) -> List[TextContent]:
                     continue
 
                 result_formatted = await format_search_result_by_type(client, item)
+                match = snippet(item.get("object") or {}, params.query)
+                if match:
+                    result_formatted = (
+                        result_formatted.rstrip("\n") + f"\n  Match: {match}\n\n"
+                    )
                 formatted_results += result_formatted
 
         return [TextContent(type="text", text=formatted_results)]

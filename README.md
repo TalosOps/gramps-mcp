@@ -43,7 +43,7 @@ No more manual data entry, no context switching between apps, no generic genealo
 
 ## Features
 
-### 38 Genealogy Tools
+### 41 Genealogy Tools
 
 #### Search & Retrieval (3 tools)
 - **find_type** - Universal search for any entity type (person, family, event, place, source, citation, media, repository) using Gramps Query Language
@@ -97,8 +97,21 @@ With an existing `handle`, `create_*` **merges**: list entries are only added an
   ```
 - **find_by_tag** - List every object of any type that carries a tag.
 
+#### Search and lookup
+- **find_type** parses GQL before anything is sent:
+  - Strings may hold any character (`text ~ "WM."`); escape `"` as `\"`, or use single quotes.
+  - Supports `and`, `or`, `not`, parentheses, `~` / `!~` (case-insensitive contains), `"x" in field`, `=`, `!=`, `<`, `>`.
+  - On notes, `text` means `text.string`.
+  - When gramps-ql can't express a query (`not`, `!~`, a string containing both quote kinds), or the server fails on it (some Gramps Web versions return HTTP 500 for any GQL on notes), the same query is evaluated locally over the objects and the result says so.
+  - A malformed query returns a syntax summary instead of a server error.
+- **get_by_gramps_id** - Any object by ID. The prefix picks the type: I person, F family, E event, P place, S source, C citation, N note, O media, R repository. Pass `type` for non-standard IDs. Returns a summary plus the complete, untruncated JSON.
+- **find_anything** results now include a ~200-character `Match:` snippet around the hit.
+
+#### Family children
+- **add_child** (`family`, `person`, `rel` = birth|adopted|stepchild|sponsored|foster|unknown|none, optional `father_rel`/`mother_rel`) and **remove_child** (`family`, `person`). Each changes exactly one entry and never replaces the list. Both accept handles or Gramps IDs, support `dry_run`/`tag`, and verify that the family's child list and the child's `parent_family_list` agree after the write.
+
 #### Analysis Tools (4 tools)
-- **tree_stats** - Get tree statistics and information
+- **tree_stats** - Tree name, id and object counts; callable with no arguments
 - **get_descendants** - Find all descendants of a person
 - **get_ancestors** - Find all ancestors of a person
 - **recent_changes** - Track recent modifications to your data
