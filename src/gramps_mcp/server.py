@@ -35,6 +35,12 @@ from pydantic import BaseModel, Field
 
 # Import all parameter models
 from .models.parameters.citation_params import CitationData
+from .models.parameters.edit_params import (
+    DeleteParams,
+    NoteAppendParams,
+    NoteFullParams,
+    UpdateParams,
+)
 from .models.parameters.event_params import EventSaveParams
 from .models.parameters.family_params import FamilySaveParams
 from .models.parameters.media_params import MediaSaveParams
@@ -66,6 +72,12 @@ from .tools import (
     get_descendants_tool,
     get_recent_changes_tool,
     get_tree_info_tool,
+)
+from .tools.deletion import make_delete_tool
+from .tools.editing import (
+    append_note_tool,
+    get_note_full_tool,
+    make_update_tool,
 )
 from .tools.search_basic import find_type_tool
 from .tools.search_details import get_type_tool
@@ -103,6 +115,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+MERGE_NOTE = (
+    ". With an existing handle this MERGES: list entries are only added and "
+    "omitted fields are kept. To remove list entries, clear fields or replace "
+    "values use update_<type>"
+)
+ENTITY_TYPES = [
+    "person",
+    "family",
+    "event",
+    "place",
+    "source",
+    "citation",
+    "note",
+    "media",
+    "repository",
+]
+
 # Tool registry - single source of truth for all tools
 TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     # Search & Retrieval Tools
@@ -131,52 +160,112 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "create_person": {
         "description": (
             "Create or update person information including family links "
-            "and event associations"
+            "and event associations" + MERGE_NOTE
         ),
         "schema": PersonData,
         "handler": create_person_tool,
     },
     "create_family": {
-        "description": "Create or update family unit including member relationships",
+        "description": (
+            "Create or update family unit including member relationships. "
+            "child_handles REPLACES the family's whole child list; to add or "
+            "remove one child use update_family add_refs/remove_refs "
+            '{"child_ref_list": [...]}' + MERGE_NOTE
+        ),
         "schema": FamilySaveParams,
         "handler": create_family_tool,
     },
     "create_event": {
         "description": (
             "Create or update life event including person/place associations"
+            + MERGE_NOTE
         ),
         "schema": EventSaveParams,
         "handler": create_event_tool,
     },
     "create_place": {
-        "description": "Create or update geographic location",
+        "description": "Create or update geographic location" + MERGE_NOTE,
         "schema": PlaceSaveParams,
         "handler": create_place_tool,
     },
     "create_source": {
-        "description": "Create or update source document",
+        "description": "Create or update source document" + MERGE_NOTE,
         "schema": SourceSaveParams,
         "handler": create_source_tool,
     },
     "create_citation": {
-        "description": "Create or update citation including object associations",
+        "description": (
+            "Create or update citation including object associations" + MERGE_NOTE
+        ),
         "schema": CitationData,
         "handler": create_citation_tool,
     },
     "create_note": {
-        "description": "Create or update textual note including object associations",
+        "description": (
+            "Create or update textual note including object associations" + MERGE_NOTE
+        ),
         "schema": NoteSaveParams,
         "handler": create_note_tool,
     },
     "create_media": {
-        "description": "Create or update media files including object associations",
+        "description": (
+            "Create or update media files including object associations" + MERGE_NOTE
+        ),
         "schema": MediaSaveParams,
         "handler": create_media_tool,
     },
     "create_repository": {
-        "description": "Create or update repository information",
+        "description": "Create or update repository information" + MERGE_NOTE,
         "schema": RepositoryData,
         "handler": create_repository_tool,
+    },
+    # Edit Tools (replace semantics)
+    **{
+        f"update_{t}": {
+            "description": (
+                f"Edit an existing {t} by handle or gramps_id with REPLACE "
+                "semantics: set_fields replaces values (lists included), "
+                "clear_fields empties them (date, place, description, lists), "
+                "add_refs/remove_refs add or drop entries in reference lists "
+                "(citation_list, note_list, event_ref_list, child_ref_list, "
+                "media_list, tag_list...) by handle or Gramps ID. New "
+                "references are checked to exist and be the right type. The "
+                "change is read back and verified. Use dry_run to preview"
+            ),
+            "schema": UpdateParams,
+            "handler": make_update_tool(t),
+        }
+        for t in ENTITY_TYPES
+    },
+    **{
+        f"delete_{t}": {
+            "description": (
+                f"Permanently delete a {t} by handle or gramps_id. Without "
+                "confirm=true it only previews the object and what references "
+                "it. With confirm=true it deletes, removes references to it "
+                "from other objects, verifies, and returns the deleted "
+                "object's summary and full JSON for logging"
+            ),
+            "schema": DeleteParams,
+            "handler": make_delete_tool(t),
+        }
+        for t in ENTITY_TYPES
+    },
+    "get_note_full": {
+        "description": (
+            "Read a note's complete text (find_type/get_type truncate notes "
+            "to 500 chars). Long notes are paged with offset/max_chars"
+        ),
+        "schema": NoteFullParams,
+        "handler": get_note_full_tool,
+    },
+    "append_note": {
+        "description": (
+            "Append text to the end of an existing note (fetch, concatenate, "
+            "save, verify). Existing text and formatting are kept"
+        ),
+        "schema": NoteAppendParams,
+        "handler": append_note_tool,
     },
     # Analysis Tools
     "tree_stats": {
@@ -294,7 +383,7 @@ async def root(request):
             "version": "1.0.0",
             "description": "MCP server for Gramps Web API genealogy operations",
             "mcp_endpoint": "/mcp",
-            "tools_count": 16,
+            "tools_count": len(TOOL_REGISTRY),
         }
     )
 
@@ -305,7 +394,11 @@ async def health_check(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(
-        {"status": "healthy", "service": "Gramps MCP Server", "tools": 16}
+        {
+            "status": "healthy",
+            "service": "Gramps MCP Server",
+            "tools": len(TOOL_REGISTRY),
+        }
     )
 
 

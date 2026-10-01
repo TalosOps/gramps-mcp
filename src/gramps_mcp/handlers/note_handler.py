@@ -64,7 +64,11 @@ async def format_note(client, tree_id: str, handle: str) -> str:
 
         # Truncate if too long
         if len(text) > MAX_NOTE_LENGTH:
-            text = text[: MAX_NOTE_LENGTH - 3] + "..."
+            text = (
+                text[:MAX_NOTE_LENGTH]
+                + f"... [truncated: {MAX_NOTE_LENGTH} of {len(text)} chars;"
+                + " use get_note_full for the complete text]"
+            )
 
         return f"{note_type} Note - {gramps_id} - [{handle}]\n{text}\n\n"
 
