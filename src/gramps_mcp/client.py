@@ -43,6 +43,58 @@ class GrampsAPIError(Exception):
     pass
 
 
+def merge_for_put(existing: Dict, changes: Dict) -> Dict:
+    """
+    Merge changes into a stored object the way create_<type> updates do.
+
+    Lists ending in ``_list`` are unioned (deduplicated by handle or ``ref``);
+    every other given field replaces the stored value; omitted fields are kept.
+
+    Args:
+        existing (Dict): Stored object.
+        changes (Dict): Fields sent by the caller.
+
+    Returns:
+        Dict: The merged object to PUT.
+    """
+    merged = existing.copy()
+    for key, value in changes.items():
+        if key.endswith("_list") and isinstance(value, list) and key in existing:
+            existing_items = existing.get(key, [])
+            if existing_items and value:
+                sample_existing, sample_new = existing_items[0], value[0]
+                if (
+                    isinstance(sample_existing, dict)
+                    and "ref" in sample_existing
+                    and isinstance(sample_new, dict)
+                    and "ref" in sample_new
+                ):
+                    # Deduplicate reference objects based on 'ref' field
+                    existing_refs = {
+                        item.get("ref")
+                        for item in existing_items
+                        if isinstance(item, dict)
+                    }
+                    merged[key] = existing_items + [
+                        item
+                        for item in value
+                        if isinstance(item, dict)
+                        and item.get("ref") not in existing_refs
+                    ]
+                elif isinstance(sample_existing, str) and isinstance(sample_new, str):
+                    existing_set = set(existing_items)
+                    merged[key] = existing_items + [
+                        item for item in value if item not in existing_set
+                    ]
+                else:
+                    merged[key] = existing_items + value
+            else:
+                merged[key] = existing_items + value
+        else:
+            merged[key] = value
+    return merged
+
+
 class GrampsWebAPIClient:
     """Unified async HTTP client for all Gramps Web API operations."""
 
@@ -140,7 +192,10 @@ class GrampsWebAPIClient:
     def _format_http_error(self, error: httpx.HTTPStatusError) -> str:
         """Convert HTTP error to user-friendly message."""
         status_code = error.response.status_code
+        detail = self._server_message(error.response)
 
+        if status_code in (400, 409, 412, 422) and detail:
+            return f"Request rejected ({status_code}): {detail}"
         if status_code == 401:
             return "Authentication failed. Please check your credentials."
         elif status_code == 403:
@@ -153,6 +208,20 @@ class GrampsWebAPIClient:
             return "Server error. Please try again later."
         else:
             return f"Request failed with status {status_code}"
+
+    @staticmethod
+    def _server_message(response: httpx.Response) -> str:
+        """Extract the API's error message (never request data or credentials)."""
+        try:
+            body = response.json()
+        except Exception:
+            return ""
+        error = body.get("error") if isinstance(body, dict) else None
+        if isinstance(error, dict):
+            return str(error.get("message", ""))[:500]
+        if isinstance(body, dict) and "message" in body:
+            return str(body["message"])[:500]
+        return ""
 
     def _build_url_with_substitution(
         self, tree_id: str, endpoint: str, url_params: Dict
@@ -246,6 +315,15 @@ class GrampsWebAPIClient:
 
         existing = None
 
+        if api_call.method in ("POST", "PUT") and json_data:
+            # Only incoming values are checked; dates already stored are left alone.
+            from .dates import normalize_dates
+
+            try:
+                json_data = normalize_dates(json_data)
+            except ValueError as e:
+                raise GrampsAPIError(f"Invalid date, nothing saved: {e}") from e
+
         # For PUT operations, preserve existing data by merging with changes
         if api_call.method == "PUT" and json_data:
             handle = url_params.get("handle") or json_data.get("handle")
@@ -257,68 +335,7 @@ class GrampsWebAPIClient:
                 )
                 existing = await self._make_request("GET", get_url)
                 if existing:
-                    # Merge existing data with changes
-                    merged_data = existing.copy()
-
-                    # Merge all fields properly - lists get concatenated,
-                    # others get replaced
-                    for key, value in json_data.items():
-                        if (
-                            key.endswith("_list")
-                            and isinstance(value, list)
-                            and key in existing
-                        ):
-                            existing_items = existing.get(key, [])
-
-                            # Smart deduplication based on list content type
-                            if existing_items and value:
-                                # Check if items are objects with 'ref' field
-                                # (like event_ref_list, media_list)
-                                sample_existing = (
-                                    existing_items[0] if existing_items else None
-                                )
-                                sample_new = value[0] if value else None
-
-                                if (
-                                    isinstance(sample_existing, dict)
-                                    and "ref" in sample_existing
-                                    and isinstance(sample_new, dict)
-                                    and "ref" in sample_new
-                                ):
-                                    # Deduplicate reference objects based on 'ref' field
-                                    existing_refs = {
-                                        item.get("ref")
-                                        for item in existing_items
-                                        if isinstance(item, dict)
-                                    }
-                                    new_items = [
-                                        item
-                                        for item in value
-                                        if isinstance(item, dict)
-                                        and item.get("ref") not in existing_refs
-                                    ]
-                                    merged_data[key] = existing_items + new_items
-                                elif isinstance(sample_existing, str) and isinstance(
-                                    sample_new, str
-                                ):
-                                    # Deduplicate simple string handles
-                                    existing_set = set(existing_items)
-                                    new_items = [
-                                        item
-                                        for item in value
-                                        if item not in existing_set
-                                    ]
-                                    merged_data[key] = existing_items + new_items
-                                else:
-                                    # Fallback: simple concatenation for
-                                    # mixed/unknown types
-                                    merged_data[key] = existing_items + value
-                            else:
-                                # If either list is empty, just concatenate
-                                merged_data[key] = existing_items + value
-                        else:
-                            merged_data[key] = value
-                    json_data = merged_data
+                    json_data = merge_for_put(existing, json_data)
 
         if api_call.method in ("POST", "PUT") and json_data:
             # Reason: the API stores any string in a reference field, so a wrong

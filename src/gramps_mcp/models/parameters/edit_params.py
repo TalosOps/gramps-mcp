@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from ...write_support import WriteOptions
+
 
 class ObjectRefParams(BaseModel):
     """Identify one object by handle or Gramps ID."""
@@ -32,7 +34,7 @@ class ObjectRefParams(BaseModel):
     )
 
 
-class UpdateParams(ObjectRefParams):
+class UpdateParams(ObjectRefParams, WriteOptions):
     """Parameters for update_<type>: fetch, edit, then PUT the whole object."""
 
     set_fields: Optional[Dict[str, Any]] = Field(
@@ -69,11 +71,18 @@ class UpdateParams(ObjectRefParams):
             "Fails (nothing saved) if an entry is not in the list"
         ),
     )
-    dry_run: bool = Field(False, description="Show the changes without saving them")
 
 
 class DeleteParams(ObjectRefParams):
     """Parameters for delete_<type>."""
+
+    dry_run: bool = Field(
+        False,
+        description=(
+            "Return what would be deleted and which objects would lose a "
+            "reference, without deleting (same as confirm=false)"
+        ),
+    )
 
     confirm: bool = Field(
         False,
@@ -93,7 +102,7 @@ class NoteFullParams(ObjectRefParams):
     )
 
 
-class NoteAppendParams(ObjectRefParams):
+class NoteAppendParams(ObjectRefParams, WriteOptions):
     """Parameters for append_note."""
 
     text: str = Field(description="Text to add to the end of the note")

@@ -303,3 +303,36 @@ def strip_for_compare(value: Any) -> Any:
     if isinstance(value, list):
         return [strip_for_compare(v) for v in value]
     return value
+
+
+def remove_handle_refs(value: Any, handle: str) -> Any:
+    """
+    Return a copy with every reference to ``handle`` removed, at any depth.
+
+    Mirrors Gramps' ``remove_handle_references``: list entries that are the
+    handle (or reference objects whose ``ref`` is the handle) are dropped, and
+    single-handle fields pointing at it are emptied.
+
+    Args:
+        value (Any): Object (or part of one) in API JSON form.
+        handle (str): Handle being deleted.
+
+    Returns:
+        Any: The cleaned copy.
+    """
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if key in REF_HANDLE_FIELDS and item == handle:
+                out[key] = ""
+            else:
+                out[key] = remove_handle_refs(item, handle)
+        return out
+    if isinstance(value, list):
+        return [
+            remove_handle_refs(item, handle)
+            for item in value
+            if item != handle
+            and not (isinstance(item, dict) and item.get("ref") == handle)
+        ]
+    return value

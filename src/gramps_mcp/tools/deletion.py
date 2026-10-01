@@ -42,7 +42,8 @@ from ..handlers.place_handler import format_place
 from ..handlers.repository_handler import format_repository
 from ..handlers.source_handler import format_source
 from ..models.parameters.edit_params import DeleteParams
-from ..references import OBJECT_TYPES, fetch_object
+from ..references import OBJECT_TYPES, fetch_object, remove_handle_refs
+from ..write_support import change_entry, render
 from .editing import _error
 from .search_basic import with_client
 
@@ -77,10 +78,10 @@ async def _summary(client, entity_type: str, obj: Dict) -> str:
 
 async def _referrers(client, entity_type: str, handle: str) -> List[Dict]:
     """
-    List objects that reference this one.
+    Fetch every object that references this one.
 
     Returns:
-        List[Dict]: Entries with type, handle and gramps_id.
+        List[Dict]: Entries with type, handle, gramps_id and the object.
     """
     collection = OBJECT_TYPES[entity_type][0]
     obj = await client.raw_request(
@@ -89,13 +90,18 @@ async def _referrers(client, entity_type: str, handle: str) -> List[Dict]:
     found = []
     for ref_type, handles in (obj.get("backlinks") or {}).items():
         for ref_handle in handles:
-            entry = {"type": ref_type, "handle": ref_handle, "gramps_id": "?"}
-            if ref_type in OBJECT_TYPES and len(found) < MAX_REFERRERS_SHOWN:
+            entry = {
+                "type": ref_type,
+                "handle": ref_handle,
+                "gramps_id": "?",
+                "obj": None,
+            }
+            if ref_type in OBJECT_TYPES:
                 try:
-                    ref_obj = await client.raw_request(
+                    entry["obj"] = await client.raw_request(
                         "GET", f"{OBJECT_TYPES[ref_type][0]}/{ref_handle}"
                     )
-                    entry["gramps_id"] = ref_obj.get("gramps_id", "?")
+                    entry["gramps_id"] = entry["obj"].get("gramps_id", "?")
                 except GrampsAPIError:
                     pass
             found.append(entry)
@@ -106,39 +112,18 @@ def _describe_referrers(referrers: List[Dict]) -> str:
     """Render referrers as one line each."""
     if not referrers:
         return "Referenced by: nothing"
+    shown = referrers[:MAX_REFERRERS_SHOWN]
     lines = [f"Referenced by {len(referrers)} object(s):"]
-    lines += [f"- {r['type']} {r['gramps_id']} [{r['handle']}]" for r in referrers]
+    lines += [f"- {r['type']} {r['gramps_id']} [{r['handle']}]" for r in shown]
+    if len(referrers) > len(shown):
+        lines.append(f"- ... and {len(referrers) - len(shown)} more")
     return "\n".join(lines)
 
 
-async def _still_referencing(client, handle: str, referrers: List[Dict]) -> List[str]:
-    """Referrers that still mention the deleted handle after the delete."""
-    leftovers = []
-    for r in referrers:
-        if r["type"] not in OBJECT_TYPES:
-            continue
-        try:
-            ref_obj = await client.raw_request(
-                "GET", f"{OBJECT_TYPES[r['type']][0]}/{r['handle']}"
-            )
-        except GrampsAPIError:
-            continue
-        if handle in json.dumps(ref_obj):
-            leftovers.append(f"{r['type']} {r['gramps_id']} [{r['handle']}]")
-    return leftovers
-
-
-def _describe_transaction(result) -> List[str]:
-    """Summarise the API's transaction list: what was deleted vs modified."""
-    lines = []
-    for item in result if isinstance(result, list) else []:
-        old, new = item.get("old") or {}, item.get("new")
-        action = "deleted" if new is None else "updated (reference removed)"
-        lines.append(
-            f"- {item.get('_class')} {old.get('gramps_id', '?')} "
-            f"[{item.get('handle')}] {action}"
-        )
-    return lines
+CASCADE_NOTES = {
+    "person": "Families left with no parents and no children are deleted too.",
+    "source": "Citations of this source are deleted too, with their references.",
+}
 
 
 @with_client
@@ -152,7 +137,7 @@ async def delete_object(client, entity_type: str, arguments: Dict) -> List[TextC
         arguments (Dict): DeleteParams fields.
 
     Returns:
-        List[TextContent]: Preview, deletion record, or an error.
+        List[TextContent]: Preview or deletion record (headline + JSON), or an error.
     """
     try:
         params = DeleteParams(**arguments)
@@ -161,16 +146,29 @@ async def delete_object(client, entity_type: str, arguments: Dict) -> List[TextC
         handle, gramps_id = obj["handle"], obj.get("gramps_id", "")
         summary = await _summary(client, entity_type, obj)
         referrers = await _referrers(client, entity_type, handle)
+        warnings = [CASCADE_NOTES[entity_type]] if entity_type in CASCADE_NOTES else []
 
-        if not params.confirm:
-            text = (
+        if params.dry_run or not params.confirm:
+            changes = [change_entry("delete", entity_type, obj, None)]
+            changes += [
+                change_entry(
+                    "update", r["type"], r["obj"], remove_handle_refs(r["obj"], handle)
+                )
+                for r in referrers
+                if r["obj"]
+            ]
+            headline = (
                 f"Preview only - nothing deleted. Would delete {entity_type} "
                 f"{gramps_id} [{handle}]:\n\n{summary}\n\n"
                 f"{_describe_referrers(referrers)}\n\n"
                 "References to it will be removed from these objects. "
                 "Re-run with confirm=true to delete."
             )
-            return [TextContent(type="text", text=text)]
+            return [
+                TextContent(
+                    type="text", text=render(headline, True, changes, warnings=warnings)
+                )
+            ]
 
         result = await client.raw_request("DELETE", f"{collection}/{handle}")
 
@@ -184,31 +182,51 @@ async def delete_object(client, entity_type: str, arguments: Dict) -> List[TextC
             if "not found" not in str(e).lower():
                 raise
 
-        lines = [
+        changes = [change_entry("delete", entity_type, obj, None)]
+        stored = []
+        for r in referrers:
+            if r["type"] not in OBJECT_TYPES:
+                continue
+            try:
+                after = await client.raw_request(
+                    "GET", f"{OBJECT_TYPES[r['type']][0]}/{r['handle']}"
+                )
+            except GrampsAPIError:
+                changes.append(change_entry("delete", r["type"], r["obj"], None))
+                continue
+            stored.append(after)
+            changes.append(change_entry("update", r["type"], r["obj"], after))
+            if handle in json.dumps(after):
+                warnings.append(
+                    f"{r['type']} {r['gramps_id']} still references the deleted "
+                    "handle; remove it with update_<type> remove_refs"
+                )
+        listed = {c["handle"] for c in changes}
+        for item in result if isinstance(result, list) else []:
+            if item.get("handle") not in listed and item.get("new") is None:
+                old = item.get("old") or {}
+                changes.append(
+                    {
+                        "op": "delete",
+                        "type": str(item.get("_class", "")).lower(),
+                        "handle": item.get("handle"),
+                        "gramps_id": old.get("gramps_id"),
+                    }
+                )
+
+        headline = (
             f"Deleted {entity_type} {gramps_id} [{handle}]. "
-            "Verified: no longer readable.",
-            "",
-            summary,
-            "",
-            _describe_referrers(referrers),
+            f"Verified: no longer readable.\n\n{summary}\n\n"
+            f"{_describe_referrers(referrers)}\n\n"
+            "The deleted object's full JSON is in changes[0].before (for the "
+            "log, or to recreate it)."
+        )
+        return [
+            TextContent(
+                type="text",
+                text=render(headline, False, changes, stored=stored, warnings=warnings),
+            )
         ]
-        changes = _describe_transaction(result)
-        if changes:
-            lines += ["", "Server transaction:", *changes]
-        leftovers = await _still_referencing(client, handle, referrers)
-        if leftovers:
-            lines += [
-                "",
-                "WARNING - these still reference the deleted handle "
-                "(remove with update_<type> remove_refs):",
-                *[f"- {x}" for x in leftovers],
-            ]
-        lines += [
-            "",
-            "Deleted object JSON (for the log / to recreate):",
-            json.dumps(obj, ensure_ascii=False),
-        ]
-        return [TextContent(type="text", text="\n".join(lines))]
     except Exception as e:
         return _error(e, f"{entity_type} delete")
 
