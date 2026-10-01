@@ -209,7 +209,9 @@ async def test_dry_run_does_not_write(api):
     text = await call(
         "update_event", {"handle": event["handle"], "set_fields": {"description": "x"}, "dry_run": True}
     )
-    assert "Dry run" in text and '"orig" -> "x"' in text, text
+    assert "Dry run" in text, text
+    fields = json.loads(text.split("```json\n", 1)[1].rsplit("\n```", 1)[0])["changes"][0]["fields"]
+    assert fields["description"] == {"before": "orig", "after": "x"}
     assert (await get(api, "events", event["handle"]))["description"] == "orig"
 
 
@@ -331,8 +333,9 @@ async def test_delete_requires_confirm_and_reports_referrers(api):
     text = await call("delete_citation", {"gramps_id": citation["gramps_id"], "confirm": True})
     assert "Verified: no longer readable" in text, text
     assert event["gramps_id"] in text
-    deleted_json = json.loads(text.rsplit("\n", 1)[-1])
-    assert deleted_json["handle"] == citation["handle"]
+    body = json.loads(text.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
+    assert body["changes"][0]["op"] == "delete"
+    assert body["changes"][0]["before"]["handle"] == citation["handle"]
     assert (await get(api, "events", event["handle"]))["citation_list"] == []
 
 

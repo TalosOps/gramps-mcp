@@ -81,7 +81,7 @@ class TestMCPServerSetup:
                 # List tools
                 tools_result = await session.list_tools()
                 tools = tools_result.tools
-                assert len(tools) == 36  # 3 search + 9 create + 9 update + 9 delete + 2 note + 4 analysis
+                assert len(tools) == 38  # 3 search + 9 create + 9 update + 9 delete + 2 note + batch + find_by_tag + 4 analysis
                 
                 # Verify all expected tools are registered
                 expected_tools = {
@@ -96,7 +96,7 @@ class TestMCPServerSetup:
                     # Edit Tools with replace semantics (9 + 9 + 2)
                     *(f"update_{t}" for t in ENTITY_TYPES),
                     *(f"delete_{t}" for t in ENTITY_TYPES),
-                    "get_note_full", "append_note",
+                    "get_note_full", "append_note", "batch", "find_by_tag",
                     
                     # Tree Management Tools (1)
                     "tree_stats",
@@ -140,7 +140,7 @@ class TestHTTPRoutes:
             assert response.status_code == 200
             data = response.json()
             assert data["service"] == "Gramps MCP Server"
-            assert data["tools_count"] == 36  # 3 search + 9 create + 9 update + 9 delete + 2 note + 4 analysis
+            assert data["tools_count"] == 38  # 3 search + 9 create + 9 update + 9 delete + 2 note + batch + find_by_tag + 4 analysis
 
     @pytest.mark.asyncio
     async def test_health_endpoint(self):
@@ -170,7 +170,7 @@ class TestMCPProtocolCompliance:
                 
                 # List tools
                 tools_result = await session.list_tools()
-                assert len(tools_result.tools) == 36  # 3 search + 9 create + 9 update + 9 delete + 2 note + 4 analysis
+                assert len(tools_result.tools) == 38  # 3 search + 9 create + 9 update + 9 delete + 2 note + batch + find_by_tag + 4 analysis
     
     @pytest.mark.asyncio
     async def test_mcp_tool_call_find_type_real_api(self):
