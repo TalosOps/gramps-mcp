@@ -24,13 +24,13 @@ Every write is read back and compared before success is reported.
 """
 
 import copy
-import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from mcp.types import TextContent
 
 from ..client import GrampsAPIError
+from ..dates import normalize_date, normalize_dates
 from ..models.parameters.edit_params import (
     NoteAppendParams,
     NoteFullParams,
@@ -47,13 +47,13 @@ from ..references import (
     strip_for_compare,
     validate_new_references,
 )
+from ..write_support import add_tag, change_entry, ensure_tag, render
 from .search_basic import with_client
 
 logger = logging.getLogger(__name__)
 
 PROTECTED_FIELDS = {"handle", "_class", "change"}
 EMPTY_DATE = {"_class": "Date"}
-DIFF_PREVIEW_CHARS = 300
 
 
 def _error(error: Exception, operation: str) -> List[TextContent]:
@@ -68,13 +68,11 @@ def _error(error: Exception, operation: str) -> List[TextContent]:
 
 def _normalize_set_value(field: str, value: Any) -> Any:
     """Fill in the Gramps JSON wrapper for convenience inputs."""
-    if field == "date" and isinstance(value, dict):
-        date = {k: v for k, v in value.items() if k not in ("sortval", "year")}
-        date.setdefault("_class", "Date")
-        return date
+    if field == "date":
+        return normalize_date(value)
     if field == "text" and isinstance(value, str):
         return {"_class": "StyledText", "string": value, "tags": []}
-    return value
+    return normalize_dates(value)
 
 
 def _cleared_value(field: str, current: Any) -> Any:
@@ -241,14 +239,6 @@ def verify_readback(intended: Dict, stored: Dict, fields: List[str]) -> List[str
     return mismatched
 
 
-def _preview(value: Any) -> str:
-    """Compact one-line JSON for a diff line."""
-    text = json.dumps(strip_for_compare(value), ensure_ascii=False)
-    if len(text) > DIFF_PREVIEW_CHARS:
-        text = text[: DIFF_PREVIEW_CHARS - 3] + "..."
-    return text
-
-
 async def _resolve_refs(
     client, obj: Dict, refs: Optional[Dict[str, List[str]]]
 ) -> Dict[str, List[str]]:
@@ -304,32 +294,68 @@ async def update_object(client, entity_type: str, arguments: Dict) -> List[TextC
             await _resolve_refs(client, obj, params.remove_refs),
         )
 
-        lines = [
-            f"{'Dry run - not saved' if params.dry_run else 'Updated'}: "
-            f"{entity_type} {gramps_id} [{handle}]"
-        ]
-        if not changed:
-            lines.append("No changes: the requested values match what is stored.")
-        for field in changed:
-            lines.append(
-                f"- {field}: {_preview(obj[field])} -> {_preview(new_obj[field])}"
-            )
-        lines.extend(f"Note: {n}" for n in notes)
-        if params.dry_run or not changed:
-            return [TextContent(type="text", text="\n".join(lines))]
+        warnings = list(notes)
+        if params.tag:
+            tag_handle = await ensure_tag(client, params.tag, params.dry_run)
+            if tag_handle:
+                tagged = add_tag(new_obj, tag_handle)
+                if tagged["tag_list"] != new_obj["tag_list"]:
+                    new_obj = tagged
+                    changed = sorted(set(changed) | {"tag_list"})
+            else:
+                warnings.append(
+                    f"tag '{params.tag}' does not exist yet; it would be created"
+                )
+        label = f"{entity_type} {gramps_id} [{handle}]"
+        change = change_entry("update", entity_type, obj, new_obj)
 
+        if not changed:
+            return [
+                TextContent(
+                    type="text",
+                    text=render(
+                        f"No changes to {label}: "
+                        "the requested values match what is stored.",
+                        True,
+                        [],
+                        warnings=warnings,
+                    ),
+                )
+            ]
         await validate_new_references(client, new_obj, obj)
+        if params.dry_run:
+            return [
+                TextContent(
+                    type="text",
+                    text=render(
+                        f"Dry run - not saved: {label}",
+                        True,
+                        [change],
+                        warnings=warnings,
+                    ),
+                )
+            ]
         await client.raw_request("PUT", f"{collection}/{handle}", json_data=new_obj)
 
         stored = await client.raw_request("GET", f"{collection}/{handle}")
         mismatched = verify_readback(new_obj, stored, changed)
         if mismatched:
-            lines[0] = f"Error: saved {entity_type} {gramps_id}, but read-back differs"
-            for field in mismatched:
-                lines.append(f"! {field} stored as: {_preview(stored.get(field))}")
+            headline = (
+                f"Error: saved {label}, but read-back differs in: "
+                f"{', '.join(mismatched)}"
+            )
         else:
-            lines.append(f"Verified by read-back ({len(changed)} field(s)).")
-        return [TextContent(type="text", text="\n".join(lines))]
+            headline = (
+                f"Updated {label}. Verified by read-back ({len(changed)} field(s))."
+            )
+        return [
+            TextContent(
+                type="text",
+                text=render(
+                    headline, False, [change], stored=[stored], warnings=warnings
+                ),
+            )
+        ]
     except Exception as e:
         return _error(e, f"{entity_type} update")
 
@@ -398,25 +424,44 @@ async def append_note_tool(client, arguments: Dict) -> List[TextContent]:
             old_text + params.separator + params.text if old_text else params.text
         )
         styled["string"] = new_text
-        note = {**note, "text": styled}
+        before = note
+        tag_handle = (
+            await ensure_tag(client, params.tag, params.dry_run) if params.tag else None
+        )
+        note = add_tag({**note, "text": styled}, tag_handle)
+        change = change_entry("update", "note", before, note)
+        label = f"note {note.get('gramps_id')} [{note['handle']}]"
+        if params.dry_run:
+            return [
+                TextContent(
+                    type="text",
+                    text=render(
+                        f"Dry run - not saved: would append {len(params.text)} chars "
+                        f"to {label} ({len(old_text)} -> {len(new_text)} chars)",
+                        True,
+                        [change],
+                    ),
+                )
+            ]
         await client.raw_request("PUT", f"notes/{note['handle']}", json_data=note)
 
         stored = await client.raw_request("GET", f"notes/{note['handle']}")
         stored_text = (stored.get("text") or {}).get("string", "")
         if stored_text != new_text:
             raise GrampsAPIError(
-                f"Saved note {note.get('gramps_id')}, but read-back length is "
+                f"Saved {label}, but read-back length is "
                 f"{len(stored_text)} (expected {len(new_text)})"
             )
-        tail = stored_text[-DIFF_PREVIEW_CHARS:]
         return [
             TextContent(
                 type="text",
-                text=(
-                    f"Appended {len(params.text)} chars to note "
-                    f"{note.get('gramps_id')} [{note['handle']}]: "
+                text=render(
+                    f"Appended {len(params.text)} chars to {label}: "
                     f"{len(old_text)} -> {len(stored_text)} chars. "
-                    f"Verified by read-back.\n\nEnd of note:\n...{tail}"
+                    "Verified by read-back.",
+                    False,
+                    [change],
+                    stored=[stored],
                 ),
             )
         ]

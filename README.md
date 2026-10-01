@@ -43,7 +43,7 @@ No more manual data entry, no context switching between apps, no generic genealo
 
 ## Features
 
-### 36 Genealogy Tools
+### 38 Genealogy Tools
 
 #### Search & Retrieval (3 tools)
 - **find_type** - Universal search for any entity type (person, family, event, place, source, citation, media, repository) using Gramps Query Language
@@ -75,6 +75,27 @@ With an existing `handle`, `create_*` **merges**: list entries are only added an
 - **append_note** - Add text to the end of a note (fetch, concatenate, save, verify). Existing text and formatting are kept.
 
 **Reference validation.** Every create and update now checks that newly added references (`citation_list`, `note_list`, `event_ref_list`, `child_ref_list`, `media_list`, `tag_list`, `father_handle`, `place`, ...) point at an existing object of the right type. Previously the API stored, for example, a note handle in `citation_list` as a dangling reference. References that were already stored are not re-checked, so objects holding old dangling references can still be edited and repaired.
+
+#### Data safety (every write tool)
+- **`dry_run: true`** on `create_*`, `update_*`, `delete_*`, `append_note` and `batch` returns the full before/after diff and writes nothing.
+- **Structured results.** Every write answers with a headline and one JSON block: `changes` (op, type, handle, gramps_id, and per-field `before`/`after`), plus `stored`. `stored` is the object **re-read from the database after the write**, not an echo of the request.
+- **`tag: "<name>"`** labels every object the call creates or changes, creating the tag if it doesn't exist. Use it to group a session's edits and find or review them later.
+- **Structured dates** are accepted anywhere a date is written:
+  `{"modifier": "about|before|after|range|span|from|to|textonly", "quality": "estimated|calculated", "start": "1850-03-15", "end": "1855"}`.
+  `start`/`end` may be `YYYY`, `YYYY-MM`, `YYYY-MM-DD` or `{year, month, day}`. A `range` or `span` without an `end` is rejected (e.g. "between 1804 (estimated)" with no second year), in raw `dateval` form too. `sortval` is never sent: the server computes it.
+
+- **batch** - Run up to 200 create/update/delete ops as **one database transaction**. Either every op is applied or nothing is: an invalid op, a bad reference, a malformed date, or an object someone else changed since it was read all reject the whole batch.
+  - Give a create an `id` and refer to it later as `"$id"`.
+  - Updates take the same `set_fields` / `clear_fields` / `add_refs` / `remove_refs` as `update_*`.
+  - The batch keeps family membership (`family_list`, `parent_family_list`) and birth/death indices consistent, and removes references to deleted objects. Deleting a person also deletes families left empty; deleting a source deletes its citations, as Gramps does.
+  ```json
+  {"tag": "cleanup-2026-10", "ops": [
+    {"op": "create", "type": "citation", "id": "c", "data": {"source_handle": "S0012", "page": "p. 7"}},
+    {"op": "update", "type": "event", "gramps_id": "E0010", "add_refs": {"citation_list": ["$c"]}, "remove_refs": {"citation_list": ["C0014"]}},
+    {"op": "delete", "type": "event", "gramps_id": "E0272"}
+  ]}
+  ```
+- **find_by_tag** - List every object of any type that carries a tag.
 
 #### Analysis Tools (4 tools)
 - **tree_stats** - Get tree statistics and information

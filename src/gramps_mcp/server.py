@@ -73,14 +73,22 @@ from .tools import (
     get_recent_changes_tool,
     get_tree_info_tool,
 )
+from .tools.batch_tools import (
+    BatchParams,
+    FindByTagParams,
+    batch_tool,
+    find_by_tag_tool,
+)
 from .tools.deletion import make_delete_tool
 from .tools.editing import (
     append_note_tool,
     get_note_full_tool,
     make_update_tool,
 )
+from .tools.save import create_media_with_options, make_create_tool
 from .tools.search_basic import find_type_tool
 from .tools.search_details import get_type_tool
+from .write_support import with_write_options
 
 
 # Simple analysis models for tools that use direct dict access
@@ -115,6 +123,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+WRITE_NOTE = (
+    ". dry_run returns the before/after diff without writing; tag labels the "
+    "object; dates may be structured, e.g. {modifier: about|before|after|"
+    "range|span, quality: estimated|calculated, start: '1850-03', end: ...}"
+)
 MERGE_NOTE = (
     ". With an existing handle this MERGES: list entries are only added and "
     "omitted fields are kept. To remove list entries, clear fields or replace "
@@ -299,6 +312,44 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
 }
 
+
+# create_<type>: same schemas plus dry_run/tag, routed through the save layer
+for _entity, (_tool, _model) in {
+    "person": ("create_person", PersonData),
+    "family": ("create_family", FamilySaveParams),
+    "event": ("create_event", EventSaveParams),
+    "place": ("create_place", PlaceSaveParams),
+    "source": ("create_source", SourceSaveParams),
+    "citation": ("create_citation", CitationData),
+    "note": ("create_note", NoteSaveParams),
+    "media": ("create_media", MediaSaveParams),
+    "repository": ("create_repository", RepositoryData),
+}.items():
+    TOOL_REGISTRY[_tool]["schema"] = with_write_options(_model)
+    TOOL_REGISTRY[_tool]["handler"] = (
+        create_media_with_options
+        if _entity == "media"
+        else make_create_tool(_entity, _model)
+    )
+    TOOL_REGISTRY[_tool]["description"] += WRITE_NOTE
+
+TOOL_REGISTRY["batch"] = {
+    "description": (
+        "Run many create/update/delete ops in ONE database transaction: all "
+        "succeed or nothing is written. Ops run in order; give a create an "
+        'id and refer to it later as "$id". Family membership, birth/death '
+        "indices and references to deleted objects are kept consistent. "
+        "Supports dry_run (full before/after diff) and tag (labels every "
+        "created/updated object)"
+    ),
+    "schema": BatchParams,
+    "handler": batch_tool,
+}
+TOOL_REGISTRY["find_by_tag"] = {
+    "description": "List every object (any type) carrying a tag, by tag name",
+    "schema": FindByTagParams,
+    "handler": find_by_tag_tool,
+}
 
 # Create FastMCP app with stateless HTTP (no SSE)
 app = FastMCP("gramps", stateless_http=True, json_response=True)
