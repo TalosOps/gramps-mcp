@@ -12,6 +12,14 @@ from src.gramps_mcp.client import GrampsWebAPIClient
 from src.gramps_mcp.models.api_calls import ApiCalls
 
 
+@pytest.fixture(autouse=True)
+def skip_reference_validation():
+    """These tests script _make_request responses for merge logic only;
+    reference validation (covered in test_edit_tools.py) would consume them."""
+    with patch("src.gramps_mcp.references.validate_new_references", AsyncMock()):
+        yield
+
+
 class TestClientMergeLogic:
     """Test the merge logic for PUT operations in the client."""
 

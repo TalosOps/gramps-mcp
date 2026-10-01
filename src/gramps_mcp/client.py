@@ -244,6 +244,8 @@ class GrampsWebAPIClient:
             else:
                 request_params = params_dict
 
+        existing = None
+
         # For PUT operations, preserve existing data by merging with changes
         if api_call.method == "PUT" and json_data:
             handle = url_params.get("handle") or json_data.get("handle")
@@ -318,6 +320,17 @@ class GrampsWebAPIClient:
                             merged_data[key] = value
                     json_data = merged_data
 
+        if api_call.method in ("POST", "PUT") and json_data:
+            # Reason: the API stores any string in a reference field, so a wrong
+            # handle silently becomes a dangling reference. Check only the
+            # references this write adds.
+            from .references import validate_new_references
+
+            try:
+                await validate_new_references(self, json_data, existing or None)
+            except ValueError as e:
+                raise GrampsAPIError(str(e)) from e
+
         # Make the API request
         return await self._make_request(
             method=api_call.method,
@@ -326,6 +339,34 @@ class GrampsWebAPIClient:
             json_data=json_data,
             return_headers=with_headers,
         )
+
+    async def raw_request(
+        self,
+        method: str,
+        endpoint: str,
+        params: Optional[Dict] = None,
+        json_data: Optional[Dict] = None,
+    ):
+        """
+        Send a request exactly as given, without the PUT merge in make_api_call.
+
+        Used by the update, delete and full-read tools, which need PUT to
+        replace the stored object instead of unioning its lists.
+
+        Args:
+            method (str): HTTP method.
+            endpoint (str): Path relative to the API root, e.g. "events/{handle}".
+            params (Optional[Dict]): Query parameters.
+            json_data (Optional[Dict]): JSON body.
+
+        Returns:
+            API response data.
+
+        Raises:
+            GrampsAPIError: If the request fails.
+        """
+        url = self._build_url("default", endpoint)
+        return await self._make_request(method, url, params=params, json_data=json_data)
 
     async def upload_media_file(
         self, file_content: bytes, mime_type: str, tree_id: str = "default"
