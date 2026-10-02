@@ -26,9 +26,10 @@ database.
 """
 
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from mcp.types import TextContent
+from pydantic import Field
 
 from ..client import GrampsAPIError, merge_for_put
 from ..config import get_settings
@@ -42,6 +43,7 @@ from ..handlers.person_handler import format_person
 from ..handlers.place_handler import format_place
 from ..handlers.repository_handler import format_repository
 from ..handlers.source_handler import format_source
+from ..models.parameters.media_params import MediaSaveParams
 from ..references import OBJECT_TYPES, validate_new_references
 from ..write_support import (
     add_tag,
@@ -194,6 +196,18 @@ def make_create_tool(entity_type: str, model_cls):
     return tool
 
 
+class MediaCreateParams(MediaSaveParams):
+    """create_media parameters, including the file to upload."""
+
+    file_location: Optional[str] = Field(
+        None,
+        description=(
+            "Path of the file on the MCP server's disk (required for new "
+            "media). To send a file from the client use upload_media"
+        ),
+    )
+
+
 @with_client
 async def create_media_with_options(client, arguments: Dict) -> List[TextContent]:
     """
@@ -203,8 +217,6 @@ async def create_media_with_options(client, arguments: Dict) -> List[TextContent
     uploaded, then the metadata and tag are saved onto the new media object.
     """
     import mimetypes
-
-    from ..models.parameters.media_params import MediaSaveParams
 
     try:
         options, args = split_options(arguments)
