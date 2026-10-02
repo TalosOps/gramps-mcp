@@ -73,6 +73,7 @@ from .tools import (
     get_recent_changes_tool,
     get_tree_info_tool,
 )
+from .tools.backup import NoParams, export_backup_tool, ping_tool
 from .tools.batch_tools import (
     BatchParams,
     FindByTagParams,
@@ -92,7 +93,13 @@ from .tools.editing import (
     make_update_tool,
 )
 from .tools.find import GetByIdParams, find_type_tool, get_by_gramps_id_tool
-from .tools.save import create_media_with_options, make_create_tool
+from .tools.integrity import CheckReferencesParams, check_references_tool
+from .tools.media_upload import UploadMediaParams, upload_media_tool
+from .tools.save import (
+    MediaCreateParams,
+    create_media_with_options,
+    make_create_tool,
+)
 from .tools.search_details import get_type_tool
 from .write_support import with_write_options
 
@@ -328,7 +335,7 @@ for _entity, (_tool, _model) in {
     "source": ("create_source", SourceSaveParams),
     "citation": ("create_citation", CitationData),
     "note": ("create_note", NoteSaveParams),
-    "media": ("create_media", MediaSaveParams),
+    "media": ("create_media", MediaCreateParams),
     "repository": ("create_repository", RepositoryData),
 }.items():
     TOOL_REGISTRY[_tool]["schema"] = with_write_options(_model)
@@ -390,6 +397,45 @@ TOOL_REGISTRY["tree_stats"]["description"] = (
     "Tree name, id and object counts (people, families, events, ...). "
     "Takes no arguments"
 )
+TOOL_REGISTRY["upload_media"] = {
+    "description": (
+        "Upload a file sent by the client (base64) into the tree's media "
+        "store, create its Media object (desc, date) and optionally attach it "
+        "to a citation/event/person/family/source/place with a region "
+        "[x1,y1,x2,y2] in percent. Rolls the upload back if attaching fails. "
+        "Supports dry_run and tag"
+    ),
+    "schema": UploadMediaParams,
+    "handler": upload_media_tool,
+}
+TOOL_REGISTRY["check_references"] = {
+    "description": (
+        "Read-only integrity report over the whole tree: dangling handles, "
+        "handles of the wrong type (e.g. a note in citation_list), orphan "
+        "people/families/events/citations, and family links that do not "
+        "match in both directions"
+    ),
+    "schema": CheckReferencesParams,
+    "handler": check_references_tool,
+}
+TOOL_REGISTRY["export_backup"] = {
+    "description": (
+        "Export the complete tree as a timestamped .gramps file into the MCP "
+        "server's GRAMPS_BACKUP_DIR; returns path, size, sha256 and checks "
+        "the file contains every object"
+    ),
+    "schema": NoParams,
+    "handler": export_backup_tool,
+}
+TOOL_REGISTRY["ping"] = {
+    "description": (
+        "Health check: MCP server up, Gramps backend reachable (with latency), "
+        "login working, tree name and versions. Reports BACKEND UNREACHABLE "
+        "explicitly"
+    ),
+    "schema": NoParams,
+    "handler": ping_tool,
+}
 TOOL_REGISTRY["find_by_tag"] = {
     "description": "List every object (any type) carrying a tag, by tag name",
     "schema": FindByTagParams,

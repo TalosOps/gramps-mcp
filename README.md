@@ -43,7 +43,7 @@ No more manual data entry, no context switching between apps, no generic genealo
 
 ## Features
 
-### 41 Genealogy Tools
+### 45 Genealogy Tools
 
 #### Search & Retrieval (3 tools)
 - **find_type** - Universal search for any entity type (person, family, event, place, source, citation, media, repository) using Gramps Query Language
@@ -109,6 +109,21 @@ With an existing `handle`, `create_*` **merges**: list entries are only added an
 
 #### Family children
 - **add_child** (`family`, `person`, `rel` = birth|adopted|stepchild|sponsored|foster|unknown|none, optional `father_rel`/`mother_rel`) and **remove_child** (`family`, `person`). Each changes exactly one entry and never replaces the list. Both accept handles or Gramps IDs, support `dry_run`/`tag`, and verify that the family's child list and the child's `parent_family_list` agree after the write.
+
+#### Media, integrity and maintenance
+- **upload_media** - Send a file from the client as `data_base64` with a `filename` (MIME is guessed, limit 25 MB).
+  - The Gramps Web server stores it under the tree's media path and the Media object gets `desc` and `date`.
+  - Optionally attach it to a citation, event, person, family, source or place, with a region `rect: [x1, y1, x2, y2]` in percent of the image.
+  - If attaching fails, the uploaded media is deleted again. Supports `dry_run`/`tag`.
+  - (`create_media` still uploads from a path on the MCP server via `file_location`, which is now part of its schema.)
+- **check_references** - Read-only integrity report over the whole tree. Every reference at any depth is checked, including `citation_list` inside names and event references. It reports:
+  - dangling handles
+  - handles of the wrong type (e.g. a note in `citation_list`)
+  - orphan people, families, events and citations
+  - family links that don't match in both directions
+- **export_backup** - Exports the complete tree (private records and living people included) as a timestamped `.gramps` file into `GRAMPS_BACKUP_DIR` on the MCP server. Returns path, size and sha256, and verifies that the file contains as many objects as the tree.
+- **ping** - Checks that the MCP server is up, the Gramps backend is reachable (with latency), and login works; also shows tree name and versions.
+- **Unreachable backend.** When the Gramps backend cannot be reached, every tool now fails with an explicit `Error: BACKEND UNREACHABLE - ...` (including whether a write may have been interrupted) instead of a generic error.
 
 #### Analysis Tools (4 tools)
 - **tree_stats** - Tree name, id and object counts; callable with no arguments
@@ -181,6 +196,10 @@ GRAMPS_USERNAME=your-gramps-web-username
 GRAMPS_PASSWORD=your-gramps-web-password
 GRAMPS_TREE_ID=your-tree-id  # Find this under System Information in Gramps Web
 ```
+
+Optional: `GRAMPS_BACKUP_DIR` is the directory where `export_backup` writes `.gramps` files. In Docker, mount a host directory there, e.g. `volumes: ["/Users/you/gramps-backups:/backups"]` with `GRAMPS_BACKUP_DIR=/backups`.
+
+For `export_backup` the Gramps Web web and Celery containers must share their export directory. The official compose file does this through its shared volumes.
 
 ## MCP Client Configuration
 
