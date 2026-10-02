@@ -26,7 +26,7 @@ from typing import Dict, List
 
 from mcp.types import TextContent
 
-from ..client import GrampsAPIError, GrampsWebAPIClient
+from ..client import GrampsAPIError, GrampsBackendUnreachable, GrampsWebAPIClient
 from ..config import get_settings
 from ..handlers.family_detail_handler import format_family_detail
 from ..handlers.person_detail_handler import format_person_detail
@@ -37,7 +37,9 @@ logger = logging.getLogger(__name__)
 
 def _format_error_response(error: Exception, operation: str) -> List[TextContent]:
     """Format error into user-friendly MCP response."""
-    if isinstance(error, GrampsAPIError):
+    if isinstance(error, GrampsBackendUnreachable):
+        error_msg = f"BACKEND UNREACHABLE - {error}"
+    elif isinstance(error, GrampsAPIError):
         error_msg = str(error)
     else:
         error_msg = f"Unexpected error during {operation}: {str(error)}"

@@ -28,7 +28,7 @@ from typing import Callable, Dict, List
 
 from mcp.types import TextContent
 
-from ..client import GrampsAPIError, GrampsWebAPIClient
+from ..client import GrampsAPIError, GrampsBackendUnreachable, GrampsWebAPIClient
 from ..config import get_settings
 from ..handlers.citation_handler import format_citation
 from ..handlers.event_handler import format_event
@@ -218,7 +218,9 @@ async def _search_entities(
 
 def _format_error_response(error: Exception, operation: str) -> List[TextContent]:
     """Format error into user-friendly MCP response."""
-    if isinstance(error, GrampsAPIError):
+    if isinstance(error, GrampsBackendUnreachable):
+        error_msg = f"BACKEND UNREACHABLE - {error}"
+    elif isinstance(error, GrampsAPIError):
         error_msg = str(error)
     else:
         error_msg = f"Unexpected error during {operation}: {str(error)}"

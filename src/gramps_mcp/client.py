@@ -43,6 +43,12 @@ class GrampsAPIError(Exception):
     pass
 
 
+class GrampsBackendUnreachable(GrampsAPIError):
+    """The Gramps Web backend could not be reached at all (network/timeout)."""
+
+    pass
+
+
 def merge_for_put(existing: Dict, changes: Dict) -> Dict:
     """
     Merge changes into a stored object the way create_<type> updates do.
@@ -183,9 +189,16 @@ class GrampsWebAPIClient:
             error_msg = self._format_http_error(e)
             raise GrampsAPIError(error_msg) from e
         except httpx.ConnectError as e:
-            raise GrampsAPIError(f"Cannot connect to Gramps API: {e}") from e
+            raise GrampsBackendUnreachable(
+                f"Gramps backend unreachable at {self.base_url} "
+                f"(connection failed: {e}). Nothing was read or written."
+            ) from e
         except httpx.TimeoutException as e:
-            raise GrampsAPIError(f"Request timeout: {e}") from e
+            raise GrampsBackendUnreachable(
+                f"Gramps backend unreachable at {self.base_url} "
+                f"(timed out: {type(e).__name__}). The request may not have "
+                "completed; check before retrying a write."
+            ) from e
         except Exception as e:
             raise GrampsAPIError(f"Unexpected error: {e}") from e
 
@@ -385,19 +398,56 @@ class GrampsWebAPIClient:
         url = self._build_url("default", endpoint)
         return await self._make_request(method, url, params=params, json_data=json_data)
 
+    async def download(self, endpoint: str, params: Optional[Dict] = None) -> bytes:
+        """
+        GET a binary file from the API.
+
+        Args:
+            endpoint (str): Path relative to the API root.
+            params (Optional[Dict]): Query parameters.
+
+        Returns:
+            bytes: The response body.
+
+        Raises:
+            GrampsAPIError: If the request fails.
+        """
+        try:
+            headers = await self._get_headers()
+            response = await self.auth_manager.client.get(
+                self._build_url("default", endpoint),
+                params=params,
+                headers=headers,
+                timeout=300.0,
+            )
+            response.raise_for_status()
+            return response.content
+        except httpx.HTTPStatusError as e:
+            raise GrampsAPIError(self._format_http_error(e)) from e
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            raise GrampsBackendUnreachable(
+                f"Gramps backend unreachable at {self.base_url} ({type(e).__name__})"
+            ) from e
+
     async def upload_media_file(
         self, file_content: bytes, mime_type: str, tree_id: str = "default"
     ):
-        """Upload a media file to Gramps."""
+        """Upload a media file to Gramps; the server stores it in its media dir."""
         url = self._build_url(tree_id, "media/")
-        headers = await self._get_headers()
-        headers["Content-Type"] = mime_type
-
-        response = await self.auth_manager.client.request(
-            method="POST", url=url, content=file_content, headers=headers
-        )
-        response.raise_for_status()
-        return response.json()
+        try:
+            headers = await self._get_headers()
+            headers["Content-Type"] = mime_type
+            response = await self.auth_manager.client.request(
+                method="POST", url=url, content=file_content, headers=headers
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            raise GrampsAPIError(self._format_http_error(e)) from e
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            raise GrampsBackendUnreachable(
+                f"Gramps backend unreachable at {self.base_url} ({type(e).__name__})"
+            ) from e
 
 
 # Export the main classes for easy import
