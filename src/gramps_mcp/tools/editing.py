@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from mcp.types import TextContent
 
-from ..client import GrampsAPIError
+from ..client import GrampsAPIError, GrampsBackendUnreachable
 from ..dates import normalize_date, normalize_dates
 from ..models.parameters.edit_params import (
     NoteAppendParams,
@@ -58,6 +58,9 @@ EMPTY_DATE = {"_class": "Date"}
 
 def _error(error: Exception, operation: str) -> List[TextContent]:
     """Format an exception as an MCP error response."""
+    if isinstance(error, GrampsBackendUnreachable):
+        logger.error(f"Backend unreachable during {operation}: {error}")
+        return [TextContent(type="text", text=f"Error: BACKEND UNREACHABLE - {error}")]
     if isinstance(error, (GrampsAPIError, ValueError)):
         error_msg = str(error)
     else:

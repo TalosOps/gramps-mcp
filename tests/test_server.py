@@ -81,7 +81,7 @@ class TestMCPServerSetup:
                 # List tools
                 tools_result = await session.list_tools()
                 tools = tools_result.tools
-                assert len(tools) == 41  # 3 search + 9 create + 9 update + 9 delete + 2 note + batch + find_by_tag + get_by_gramps_id + 2 child + 4 analysis
+                assert len(tools) == 45  # 3 search + 9 create + 9 update + 9 delete + 2 note + batch + find_by_tag + get_by_gramps_id + 2 child + 4 maintenance + 4 analysis
                 
                 # Verify all expected tools are registered
                 expected_tools = {
@@ -98,6 +98,7 @@ class TestMCPServerSetup:
                     *(f"delete_{t}" for t in ENTITY_TYPES),
                     "get_note_full", "append_note", "batch", "find_by_tag",
                     "get_by_gramps_id", "add_child", "remove_child",
+                    "upload_media", "check_references", "export_backup", "ping",
                     
                     # Tree Management Tools (1)
                     "tree_stats",
@@ -141,7 +142,7 @@ class TestHTTPRoutes:
             assert response.status_code == 200
             data = response.json()
             assert data["service"] == "Gramps MCP Server"
-            assert data["tools_count"] == 41  # 3 search + 9 create + 9 update + 9 delete + 2 note + batch + find_by_tag + get_by_gramps_id + 2 child + 4 analysis
+            assert data["tools_count"] == 45  # 3 search + 9 create + 9 update + 9 delete + 2 note + batch + find_by_tag + get_by_gramps_id + 2 child + 4 maintenance + 4 analysis
 
     @pytest.mark.asyncio
     async def test_health_endpoint(self):
@@ -171,7 +172,7 @@ class TestMCPProtocolCompliance:
                 
                 # List tools
                 tools_result = await session.list_tools()
-                assert len(tools_result.tools) == 41  # 3 search + 9 create + 9 update + 9 delete + 2 note + batch + find_by_tag + get_by_gramps_id + 2 child + 4 analysis
+                assert len(tools_result.tools) == 45  # 3 search + 9 create + 9 update + 9 delete + 2 note + batch + find_by_tag + get_by_gramps_id + 2 child + 4 maintenance + 4 analysis
     
     @pytest.mark.asyncio
     async def test_mcp_tool_call_find_type_real_api(self):

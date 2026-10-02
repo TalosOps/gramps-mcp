@@ -165,8 +165,9 @@ class AuthManager:
             if e.response.status_code == 403:
                 raise ValueError("Invalid username or password")
             raise ValueError(f"Authentication failed: HTTP {e.response.status_code}")
-        except httpx.ConnectError as e:
-            raise ValueError(f"Cannot connect to Gramps API: {e}")
+        except (httpx.ConnectError, httpx.TimeoutException):
+            # Reason: let the client report an unreachable backend distinctly
+            raise
         except Exception as e:
             raise ValueError(f"Authentication error: {e}")
 
