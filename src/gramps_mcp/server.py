@@ -362,8 +362,9 @@ TOOL_REGISTRY["find_type"]["handler"] = find_type_tool
 TOOL_REGISTRY["find_type"]["description"] = (
     "Search one entity type with GQL (read gql://documentation). Supports "
     "and / or / not, parentheses, ~ (contains), !~, quoted strings with any "
-    'characters (escape " as \\"). Queries the server cannot run are '
-    "evaluated locally"
+    'characters (escape " as \\"). GQL is evaluated by this server against '
+    "every object of the type. Optional goql runs a GOQL expression in Gramps "
+    "Web itself (API 3.26+)"
 )
 TOOL_REGISTRY["find_anything"][
     "description"

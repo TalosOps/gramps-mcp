@@ -49,7 +49,25 @@ class SimpleFindParams(BaseModel):
     """Simplified parameters for type-based search."""
 
     type: EntityType = Field(description="Entity type to search")
-    gql: str = Field(description="Gramps Query Language filter")
+    gql: str = Field(
+        default="",
+        description=(
+            "GQL filter, evaluated by the MCP server against every object of "
+            "the type (read gql://documentation)"
+        ),
+    )
+    goql: str = Field(
+        default="",
+        description=(
+            "Optional GOQL expression run by Gramps Web itself (API 3.26+). "
+            "Fields are relative to the object, no type prefix. People: "
+            "\"'Berry' in surname\", \"gender == Person.FEMALE and 'Mary' in given_name\", "
+            "\"0 < birth.date.sortval < Date('1800')\", \"len(families) > 1\", "
+            "\"any(events, type.value == EventType.BURIAL)\", \"any(tags, name == 'superseded')\". "
+            "Events: \"type.value == EventType.MARRIAGE and Date('1850') <= date.sortval < Date('1860')\", "
+            "\"'war' in description\". Give gql or goql, not both"
+        ),
+    )
     max_results: int = Field(default=20, description="Maximum results to return")
 
 

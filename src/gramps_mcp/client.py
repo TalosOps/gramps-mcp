@@ -231,7 +231,23 @@ class GrampsWebAPIClient:
             return ""
         error = body.get("error") if isinstance(body, dict) else None
         if isinstance(error, dict):
-            return str(error.get("message", ""))[:500]
+            message = str(error.get("message", ""))[:500]
+            details = []
+
+            def leaves(node):
+                if isinstance(node, str):
+                    details.append(node)
+                elif isinstance(node, list):
+                    for item in node:
+                        leaves(item)
+                elif isinstance(node, dict):
+                    for item in node.values():
+                        leaves(item)
+
+            leaves(error.get("messages"))
+            if details:
+                message = f"{message}: {'; '.join(details)}"[:900]
+            return message
         if isinstance(body, dict) and "message" in body:
             return str(body["message"])[:500]
         return ""

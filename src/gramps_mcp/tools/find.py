@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 """
-find_type (GQL with local fallback), get_by_gramps_id and search snippets.
+find_type (GQL evaluated locally, or GOQL on the server), get_by_gramps_id and search snippets.
 """
 
 import json
@@ -26,7 +26,7 @@ from mcp.types import TextContent
 from pydantic import BaseModel, Field
 
 from ..client import GrampsAPIError
-from ..gql import BoolOp, Compare, GQLError, Not, matches, parse, to_server
+from ..gql import BoolOp, Compare, GQLError, Not, matches, parse
 from ..references import OBJECT_TYPES, get_by_gramps_id
 from .editing import _error
 from .save import describe
@@ -96,16 +96,16 @@ async def _scan(client, collection: str, node) -> List[Dict]:
 @with_client
 async def find_type_tool(client, arguments: Dict) -> List[TextContent]:
     """
-    Search one object type with GQL.
+    Search one object type.
 
-    The query is parsed here first. If gramps-ql can express it, the server
-    runs it; otherwise (``not``, ``!~``, a string with both quote kinds) or if
-    the server fails on it (some versions return 500 for any GQL on notes),
-    objects are scanned and the same query is evaluated locally.
+    ``gql`` is parsed and evaluated here, against every object of the type,
+    so the same rules apply on every Gramps Web version (Web API 3.26 removed
+    the server-side ``gql`` parameter). ``goql`` is sent to the server as a
+    ``MatchesQuery`` rule (Gramps Web API 3.26 or later).
 
     Args:
         client: Gramps API client instance (injected).
-        arguments (Dict): type, gql, max_results.
+        arguments (Dict): type, gql or goql, max_results.
 
     Returns:
         List[TextContent]: Formatted matches, or an error.
@@ -116,51 +116,57 @@ async def find_type_tool(client, arguments: Dict) -> List[TextContent]:
         if entity_type not in OBJECT_TYPES:
             raise ValueError(f"Entity type '{entity_type}' not supported")
         collection = OBJECT_TYPES[entity_type][0]
-        try:
-            node = parse(arguments.get("gql") or "")
-        except GQLError as e:
-            raise ValueError(f"Could not parse the GQL query: {e}. {GQL_HELP}") from e
-        if entity_type == "note":
-            node = _rename_paths(node, {"text": "text.string"})
-
-        server_query = to_server(node)
-        note = ""
-        rows: Optional[List[Dict]] = None
-        if server_query is not None:
+        url = client._build_url("default", f"{collection}/")
+        gql_text = arguments.get("gql") or ""
+        goql = (arguments.get("goql") or "").strip()
+        if goql and gql_text.strip():
+            raise ValueError("Give either gql or goql, not both")
+        if goql:
+            rules = json.dumps(
+                {"rules": [{"name": "MatchesQuery", "values": [goql]}]}
+            )
             try:
-                params = {"pagesize": max_results}
-                if server_query:
-                    params["gql"] = server_query
                 rows, headers = await client._make_request(
                     "GET",
-                    client._build_url("default", f"{collection}/"),
-                    params=params,
+                    url,
+                    params={"rules": rules, "pagesize": max_results},
                     return_headers=True,
                 )
-                total = int(headers.get("x-total-count", len(rows or [])))
             except GrampsAPIError as e:
-                if "server error" not in str(e).lower():
-                    raise
-                note = (
-                    "(The server could not run this query; it was evaluated locally.)\n"
-                )
+                raise ValueError(
+                    f"The server could not run the GOQL query: {e}. GOQL fields "
+                    "are relative to the object (e.g. gramps_id == 'I0084', "
+                    "'Berry' in surname, type.value == EventType.BIRTH) and "
+                    "need Gramps Web API 3.26 or later; gql works on every version."
+                ) from e
+            total = int(headers.get("x-total-count", len(rows or [])))
         else:
-            note = "(gramps-ql cannot express this query; it was evaluated locally.)\n"
-        if rows is None:
-            rows = await _scan(client, collection, node)
-            total = len(rows)
+            try:
+                node = parse(gql_text)
+            except GQLError as e:
+                raise ValueError(
+                    f"Could not parse the GQL query: {e}. {GQL_HELP}"
+                ) from e
+            if entity_type == "note":
+                node = _rename_paths(node, {"text": "text.string"})
+            if node is None:
+                rows, headers = await client._make_request(
+                    "GET", url, params={"pagesize": max_results}, return_headers=True
+                )
+                total = int(headers.get("x-total-count", len(rows or [])))
+            else:
+                rows = await _scan(client, collection, node)
+                total = len(rows)
 
         plural = collection
         if not rows:
-            return [TextContent(type="text", text=f"{note}No {plural} found")]
+            return [TextContent(type="text", text=f"No {plural} found")]
         shown = rows[:max_results]
         header = f"Found {total} {plural}" + (
             f" (showing {len(shown)})" if total > len(shown) else ""
         )
         blocks = [await describe(client, entity_type, r["handle"]) for r in shown]
-        return [
-            TextContent(type="text", text=f"{note}{header}:\n\n" + "\n\n".join(blocks))
-        ]
+        return [TextContent(type="text", text=f"{header}:\n\n" + "\n\n".join(blocks))]
     except Exception as e:
         return _error(e, f"{entity_type} search")
 
